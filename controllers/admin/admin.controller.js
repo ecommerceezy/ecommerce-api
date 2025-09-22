@@ -1079,7 +1079,7 @@ export const adminController = {
         };
       }
 
-      const [members, total] = await Promise.all([
+      const [members, total, sumAmout] = await Promise.all([
         prisma.tb_user.findMany({
           take: Number(take),
           skip,
@@ -1111,11 +1111,23 @@ export const adminController = {
             ...filter,
           },
         }),
+        prisma.tb_billorder.groupBy({
+          by: ["user_id"],
+          _sum: {
+            bill_price: true,
+          },
+        }),
       ]);
 
       set.status = 200;
       return {
-        members,
+        members: members.map((m) => {
+          const match = sumAmout.find((s) => s.user_id === m.user_id);
+          return {
+            ...m,
+            total: match && match._sum.bill_price,
+          };
+        }),
         total,
         totalPage: Math.ceil(total / take) < 1 ? 1 : Math.ceil(total / take),
       };
@@ -1127,7 +1139,6 @@ export const adminController = {
   create_members: async ({ set, body }) => {
     try {
       const { email, first_name, last_name, title_type, password } = body;
-      console.log("🚀 ~ body:", body);
       if (!email || !first_name || !last_name || !title_type || !password) {
         return (set.status = 400);
       }
