@@ -9,6 +9,7 @@ import {
 } from "../../libs/helper-admin";
 import { transporter } from "../../config/config";
 import bcrytpjs from "bcryptjs";
+import { t } from "elysia";
 
 const prisma = new PrismaClient();
 
@@ -59,6 +60,7 @@ export const adminController = {
           id: true,
           name: true,
           status: true,
+          img: true,
           remark: true,
           _count: {
             select: {
@@ -104,15 +106,21 @@ export const adminController = {
   },
   create_ctg: async ({ body, set }) => {
     try {
-      const { name, remark, status } = body;
+      const { name, remark, status, img: file } = body;
       if (!name || !remark || !status) {
         return (set.status = 400);
       }
 
+      // create image
+      const imgName = `${Date.now()}_${file.name?.replace(/\s+/g, "")}`;
+      await Bun.write(`./public/upload/${imgName}`, file);
+
       const create = await prisma.tb_category.create({
         data: {
           status: `${body.status}`,
-          ...body,
+          name,
+          remark,
+          img: imgName,
         },
       });
       if (!create) return (set.status = 400);
@@ -128,13 +136,43 @@ export const adminController = {
     try {
       const { ctgid } = params;
       if (!ctgid) return (set.status = 400);
+      const { name, remark, status, img: file, changeImage } = body;
+
+      const oldImage = await prisma.tb_category.findUnique({
+        where: { id: Number(ctgid) },
+        select: { img: true },
+      });
+      let imgName = oldImage.img;
+      if (changeImage && imgName) {
+        const imgPath = path.join(
+          import.meta.dir,
+          "../../public/upload",
+          imgName
+        );
+        if (existsSync(imgPath)) {
+          try {
+            await unlink(imgPath);
+            console.log("Successfully deleted:", imgPath);
+          } catch (error) {
+            console.error("Error deleting file:", error);
+          }
+        }
+      }
+
+      if (file) {
+        imgName = `${Date.now()}_${file.name?.replace(/\s+/g, "")}`;
+        await Bun.write(`./public/upload/${imgName}`, file);
+      }
 
       const update = await prisma.tb_category.update({
         where: {
           id: Number(ctgid),
         },
         data: {
-          ...body,
+          status: `${status}`,
+          name,
+          remark,
+          img: imgName,
         },
       });
       if (!update) return (set.status = 400);
@@ -150,6 +188,24 @@ export const adminController = {
     try {
       const { ctgid } = params;
       if (!ctgid) return (set.status = 400);
+
+      const oldImage = await prisma.tb_category.findUnique({
+        where: { id: Number(ctgid) },
+        select: { img: true },
+      });
+      const imgPath = path.join(
+        import.meta.dir,
+        "../../public/upload",
+        oldImage.img
+      );
+      if (existsSync(imgPath)) {
+        try {
+          await unlink(imgPath);
+          console.log("Successfully deleted:", imgPath);
+        } catch (error) {
+          console.error("Error deleting file:", error);
+        }
+      }
 
       const del = await prisma.tb_category.delete({
         where: {
@@ -183,6 +239,7 @@ export const adminController = {
         pro_size,
         pro_details,
         categories,
+        unit,
         "images[]": images,
         ...rest
       } = body;
@@ -208,6 +265,7 @@ export const adminController = {
         // ✅ Create product + many-to-many categories
         const product = await tx.tb_product.create({
           data: {
+            unit,
             pro_name: pro_name.trim(),
             pro_price: Number(pro_price),
             freight: Number(freight),
@@ -241,8 +299,6 @@ export const adminController = {
         };
       });
 
-      console.log("✅ Product created successfully:", result.product.pro_id);
-
       return {
         success: true,
         data: result.product,
@@ -253,8 +309,6 @@ export const adminController = {
         },
       };
     } catch (error) {
-      console.error("❌ Error creating product:", error);
-
       if (
         error.message.includes("Validation errors") ||
         error.message.includes("Categories") ||
@@ -362,6 +416,7 @@ export const adminController = {
             pro_details: true,
             pro_number: true,
             sell_count: true,
+            unit: true,
           },
           orderBy: {
             ...JSON.parse(sort),
@@ -467,6 +522,7 @@ export const adminController = {
       if (!pro_id) return (set.status = 400);
 
       const {
+        unit,
         name,
         remark,
         pro_name,
@@ -568,6 +624,7 @@ export const adminController = {
             pro_id: Number(pro_id),
           },
           data: {
+            unit,
             pro_name: pro_name.trim(),
             pro_price: Number(pro_price),
             freight: Number(freight),
@@ -650,7 +707,21 @@ export const adminController = {
           ],
         };
       }
-      if (status !== "all") {
+      if (status === "cancel") {
+        filter = {
+          ...filter,
+          OR: [
+            {
+              status_pm: "cancel",
+            },
+            {
+              status_pm: {
+                contains: "return",
+              },
+            },
+          ],
+        };
+      } else if (status !== "all") {
         filter = {
           ...filter,
           status_pm: status,
@@ -709,30 +780,50 @@ export const adminController = {
   },
   get_order_avg: async ({ set }) => {
     try {
-      const [allOrders, allPending, allRecevied, allCancel, allSending] =
-        await Promise.all([
-          prisma.tb_billorder.count(),
-          prisma.tb_billorder.count({
-            where: {
-              status_pm: "pending",
-            },
-          }),
-          prisma.tb_billorder.count({
-            where: {
-              status_pm: "recevied",
-            },
-          }),
-          prisma.tb_billorder.count({
-            where: {
-              status_pm: "cancel",
-            },
-          }),
-          prisma.tb_billorder.count({
-            where: {
-              status_pm: "sending",
-            },
-          }),
-        ]);
+      const [
+        allOrders,
+        allPending,
+        allRecevied,
+        allCancel,
+        allSending,
+        allReturnPending,
+      ] = await Promise.all([
+        prisma.tb_billorder.count(),
+        prisma.tb_billorder.count({
+          where: {
+            status_pm: "pending",
+          },
+        }),
+        prisma.tb_billorder.count({
+          where: {
+            status_pm: "recevied",
+          },
+        }),
+        prisma.tb_billorder.count({
+          where: {
+            OR: [
+              {
+                status_pm: "cancel",
+              },
+              {
+                status_pm: {
+                  contains: "return",
+                },
+              },
+            ],
+          },
+        }),
+        prisma.tb_billorder.count({
+          where: {
+            status_pm: "sending",
+          },
+        }),
+        prisma.tb_billorder.count({
+          where: {
+            status_pm: "return_pending",
+          },
+        }),
+      ]);
 
       set.status = 200;
       return {
@@ -741,6 +832,7 @@ export const adminController = {
         allRecevied,
         allCancel,
         allSending,
+        allReturnPending,
       };
     } catch (error) {
       console.error(error);
@@ -763,6 +855,8 @@ export const adminController = {
           bill_date: true,
           pm_method: true,
           bill_productPeace: true,
+          bill_totalDiscount: true,
+          slip_return: true,
           order_details: {
             select: {
               detail_id: true,
@@ -795,7 +889,23 @@ export const adminController = {
               last_name: true,
               tel: true,
               email: true,
-              address: true,
+              bank_name: true,
+              bank_number: true,
+              bank_owner: true,
+              tb_user_address: {
+                take: 1,
+                where: {
+                  is_using: true,
+                },
+                select: {
+                  province: true,
+                  address: true,
+                  district: true,
+                  phone: true,
+                  sub_district: true,
+                  zipcode: true,
+                },
+              },
             },
           },
         },
@@ -889,6 +999,9 @@ export const adminController = {
     try {
       const [sellPrice, allPending, allStock, allMembers] = await Promise.all([
         prisma.tb_billorder.aggregate({
+          where: {
+            status_pm: "recevied",
+          },
           _sum: {
             bill_price: true,
           },
@@ -1014,6 +1127,9 @@ export const adminController = {
   sell_reports: async ({ set }) => {
     try {
       const orders = await prisma.tb_billorder.findMany({
+        where: {
+          status_pm: "recevied",
+        },
         select: {
           bill_date: true,
           bill_price: true,
@@ -1142,7 +1258,6 @@ export const adminController = {
       if (!email || !first_name || !last_name || !title_type || !password) {
         return (set.status = 400);
       }
-
       const isExisting = await prisma.tb_user.findFirst({
         where: {
           OR: [
@@ -1320,6 +1435,537 @@ export const adminController = {
     } catch (error) {
       console.error(error);
       return (set.status = 500);
+    }
+  },
+  add_banner: async ({ set, body }) => {
+    try {
+      const { image, status } = body;
+      if (!image) return (set.status = 400);
+
+      const imgName = `${Date.now()}_${image?.name?.replace(/\s+/g, "")}`;
+      await Bun.write(`./public/upload/${imgName}`, image);
+      const newBanner = await prisma.banners.create({
+        data: {
+          img: imgName,
+          status: `${status}`,
+        },
+      });
+      if (!newBanner) return (set.status = 400);
+
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  edit_banner: async ({ set, body, params }) => {
+    try {
+      const { bannerid: id } = params;
+      const { image, status, changeImage } = body;
+      if (!id) return (set.status = 400);
+      const banner = await prisma.banners.findUnique({
+        where: { id: Number(id) },
+        select: {
+          img: true,
+        },
+      });
+      if (!banner) return (set.status = 404);
+      let imgName = banner.img;
+
+      if (changeImage) {
+        // ลบรูปเดิม
+        const imgPath = path.join(
+          import.meta.dir,
+          "../../public/upload",
+          imgName
+        );
+        if (existsSync(imgPath)) {
+          try {
+            await unlink(imgPath);
+            console.log("Successfully deleted:", imgPath);
+          } catch (error) {
+            console.error("Error deleting file:", error);
+          }
+        }
+      }
+      if (image && image !== "null") {
+        // อัปโหลดรูปใหม่
+        imgName = `${Date.now()}_${image?.name?.replace(/\s+/g, "")}`;
+        await Bun.write(`./public/upload/${imgName}`, image);
+      }
+
+      const update = await prisma.banners.update({
+        where: { id: Number(id) },
+        data: {
+          img: imgName,
+          status: `${status}`,
+        },
+      });
+      if (!update) return (set.status = 400);
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  delete_banner: async ({ set, params }) => {
+    try {
+      const { bannerid: id } = params;
+      if (!id) return (set.status = 400);
+      const banner = await prisma.banners.findUnique({
+        where: { id: Number(id) },
+        select: {
+          img: true,
+        },
+      });
+      if (!banner) return (set.status = 404);
+      const imgPath = path.join(
+        import.meta.dir,
+        "../../public/upload",
+        banner.img
+      );
+      if (existsSync(imgPath)) {
+        try {
+          await unlink(imgPath);
+          console.log("Successfully deleted:", imgPath);
+        } catch (error) {
+          console.error("Error deleting file:", error);
+        }
+      }
+      const del = await prisma.banners.delete({
+        where: { id: Number(id) },
+      });
+      if (!del) return (set.status = 400);
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  update_slip_return: async ({ set, body, params }) => {
+    try {
+      const { orderid } = params;
+      const { slip_return } = body;
+      if (!orderid) return (set.status = 400);
+
+      let oldSlip = await prisma.tb_billorder.findUnique({
+        where: {
+          bill_id: orderid,
+        },
+        select: {
+          slip_return: true,
+          status_pm: true,
+          user: {
+            select: {
+              email: true,
+            },
+          },
+        },
+      });
+      if (!oldSlip) return (set.status = 404);
+      if (oldSlip.slip_return && slip_return !== "null") {
+        // ลบรูปเดิม
+        const imgPath = path.join(
+          import.meta.dir,
+          "../../public/upload",
+          oldSlip.slip_return
+        );
+        if (existsSync(imgPath)) {
+          try {
+            await unlink(imgPath);
+            console.log("Successfully deleted:", imgPath);
+          } catch (error) {
+            console.error("Error deleting file:", error);
+          }
+        }
+      }
+
+      let imgName = oldSlip.slip_return;
+      if (slip_return && slip_return !== "null") {
+        // อัปโหลดรูปใหม่
+        imgName = `${Date.now()}_${slip_return?.name?.replace(/\s+/g, "")}`;
+        await Bun.write(`./public/upload/${imgName}`, slip_return);
+      }
+
+      // ส่งอีเมล
+      if (oldSlip.status_pm === "return_pending") {
+        const mailOptions = {
+          from: "ร้านค้าได้คืนเงินให้คุณแล้ว!", // เปลี่ยนเป็นอีเมลของคุณ
+          to: oldSlip.user.email, // ใส่อีเมลลูกค้า
+          subject: `หลักฐานการคืนเงินถูกอัปโหลดแล้ว | คำสั่งซื้อ #${orderid}`,
+          html: `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6;">
+        <h2 style="color: #2E86C1;">📢 แจ้งเตือนการคืนเงิน</h2>
+        <p>เรียนคุณลูกค้า,</p>
+        <p>หลักฐานการคืนเงินสำหรับคำสั่งซื้อ <strong>#${orderid}</strong> ได้ถูกอัปโหลดเรียบร้อยแล้ว</p>
+        <p>โปรดเข้าระบบเพื่อตรวจสอบรายละเอียดการคืนเงินของคุณ</p>
+       
+        <p style="margin-top: 20px;">หากคุณไม่ได้ร้องขอการคืนเงินนี้ กรุณาติดต่อฝ่ายสนับสนุนทันที</p>
+        <hr>
+        <p style="font-size: 12px; color: #777;">ขอขอบคุณที่ใช้บริการของเรา</p>
+      </div>
+    `,
+        };
+
+        await transporter.sendMail(mailOptions);
+      }
+
+      const update = await prisma.tb_billorder.update({
+        where: {
+          bill_id: orderid,
+        },
+        data: {
+          slip_return: imgName,
+          status_pm: "return_sending",
+        },
+      });
+      if (!update) return (set.status = 400);
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  product_promotion_options: async ({ set }) => {
+    try {
+      const data = await prisma.tb_product.findMany({
+        where: {
+          promotion: {
+            is: null,
+          },
+        },
+        select: {
+          pro_id: true,
+          pro_name: true,
+        },
+      });
+
+      set.status === 200;
+      return data.map((d) => ({ label: d?.pro_name, value: d?.pro_id }));
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  new_promotion: async ({ body, set }) => {
+    try {
+      const {
+        name,
+        description,
+        discount,
+        startDate,
+        endDate,
+        selectProductId,
+      } = body;
+
+      if (
+        !name ||
+        !discount ||
+        !startDate ||
+        !endDate ||
+        !selectProductId ||
+        selectProductId.length === 0
+      ) {
+        set.status = 400;
+        return { err: "ข้อมูลไม่ครบถ้วน" };
+      }
+
+      const nameExist = await prisma.tb_promotion.findUnique({
+        where: { name },
+        select: { id: true },
+      });
+
+      if (nameExist) {
+        set.status = 400;
+        return { err: "พบว่ามีโปรโมชันชื่อนี้ในระบบแล้ว" };
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        // Create promotion
+        const newPromotion = await tx.tb_promotion.create({
+          data: {
+            name,
+            discount,
+            description,
+            start_date: new Date(startDate),
+            end_date: new Date(endDate),
+          },
+        });
+
+        // Update products to link with this promotion
+        const productIds = selectProductId.map((item) => item.value);
+
+        await tx.tb_product.updateMany({
+          where: {
+            pro_id: { in: productIds },
+          },
+          data: {
+            promotion_id: newPromotion.id,
+          },
+        });
+
+        return newPromotion;
+      });
+
+      set.status = 200;
+      return { success: true, data: result };
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
+      return { err: "เกิดข้อผิดพลาดในการสร้างโปรโมชัน" };
+    }
+  },
+  get_promotions: async ({ set, query }) => {
+    try {
+      const { page, search, sort, promotionStart, promotionEnd, take } = query;
+      const skip = Number(take) * (page - 1);
+
+      let filter = {};
+      if (search) {
+        filter = {
+          AND: [
+            {
+              name: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              description: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+          ],
+        };
+      }
+      if (promotionStart) {
+        filter = {
+          ...filter,
+          start_date: promotionStart,
+        };
+      }
+      if (promotionEnd) {
+        filter = {
+          ...filter,
+          end_date: promotionEnd,
+        };
+      }
+
+      const [data, total] = await Promise.all([
+        prisma.tb_promotion.findMany({
+          take: Number(take),
+          skip,
+          where: {
+            ...filter,
+          },
+          select: {
+            id: true,
+            name: true,
+            start_date: true,
+            end_date: true,
+            discount: true,
+            description: true,
+            _count: {
+              select: {
+                products: true,
+              },
+            },
+          },
+          orderBy: {
+            ...JSON.parse(sort),
+          },
+        }),
+        prisma.tb_promotion.count({
+          where: {
+            ...filter,
+          },
+        }),
+      ]);
+
+      set.status = 200;
+      return {
+        data,
+        total,
+        totalPage: Math.ceil(total / take) < 1 ? 1 : Math.ceil(total / take),
+      };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  get_promotion_avg: async ({ set }) => {
+    try {
+      const [allPromotion, allProductInPromotion] = await Promise.all([
+        prisma.tb_promotion.count(),
+        prisma.tb_product.count({
+          where: {
+            promotion_id: {
+              not: null,
+            },
+          },
+        }),
+      ]);
+
+      set.status = 200;
+      return { allPromotion, allProductInPromotion };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  delete_promotion: async ({ set, params }) => {
+    try {
+      const { promotionId } = params;
+      if (!promotionId) return (set.status = 400);
+
+      const del = await prisma.tb_promotion.delete({
+        where: {
+          id: Number(promotionId),
+        },
+      });
+      if (!del) return (set.status = 400);
+
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  get_promotion_id: async ({ set, params }) => {
+    try {
+      const { promotionId } = params;
+      if (!promotionId) return (set.status = 400);
+
+      const promotion = await prisma.tb_promotion.findUnique({
+        where: {
+          id: Number(promotionId),
+        },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          start_date: true,
+          end_date: true,
+          discount: true,
+          products: {
+            select: {
+              pro_id: true,
+              pro_name: true,
+              pro_price: true,
+              imgs: {
+                take: 1,
+                select: {
+                  url: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      set.status = 200;
+      return promotion;
+    } catch (error) {
+      console.error(error);
+      return (set.status = 500);
+    }
+  },
+  update_promotion: async ({ set, body, params }) => {
+    try {
+      const { promotionId } = params;
+      if (!promotionId) {
+        set.status = 400;
+        return { err: "ไม่พบ ID โปรโมชัน" };
+      }
+
+      const {
+        name,
+        description,
+        discount,
+        startDate,
+        endDate,
+        selectProductId,
+      } = body;
+      console.log("🚀 ~ body:", body);
+
+      if (
+        !name ||
+        !discount ||
+        !startDate ||
+        !endDate ||
+        !selectProductId ||
+        selectProductId.length === 0
+      ) {
+        set.status = 400;
+        return { err: "ข้อมูลไม่ครบถ้วน" };
+      }
+
+      // Check if promotion exists
+      const promotionExist = await prisma.tb_promotion.findUnique({
+        where: { id: Number(promotionId) },
+      });
+
+      if (!promotionExist) {
+        set.status = 404;
+        return { err: "ไม่พบโปรโมชันนี้ในระบบ" };
+      }
+
+      // Check if name is taken by another promotion
+      const nameExist = await prisma.tb_promotion.findUnique({
+        where: { name },
+        select: { id: true },
+      });
+
+      if (nameExist && nameExist.id === promotionId) {
+        set.status = 400;
+        return { err: "พบว่ามีโปรโมชันชื่อนี้ในระบบแล้ว" };
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        // Update promotion
+        const updatedPromotion = await tx.tb_promotion.update({
+          where: { id: Number(promotionId) },
+          data: {
+            name,
+            discount,
+            description,
+            start_date: new Date(startDate),
+            end_date: new Date(endDate),
+          },
+        });
+
+        // Remove promotion from all products that had this promotion
+        await tx.tb_product.updateMany({
+          where: { promotion_id: Number(promotionId) },
+          data: { promotion_id: null },
+        });
+
+        // Add promotion to selected products
+        const productIds = selectProductId.map((item) => item.value);
+        await tx.tb_product.updateMany({
+          where: {
+            pro_id: { in: productIds },
+          },
+          data: {
+            promotion_id: Number(promotionId),
+          },
+        });
+
+        return updatedPromotion;
+      });
+
+      set.status = 200;
+      return { success: true, data: result };
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
+      return { err: "เกิดข้อผิดพลาดในการอัปเดตโปรโมชัน" };
     }
   },
 };

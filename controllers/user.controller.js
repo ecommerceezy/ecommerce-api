@@ -7,7 +7,6 @@ import QRCode from "qrcode";
 import generatePayload from "promptpay-qr";
 import { v4 as uuid } from "uuid";
 import { transporter } from "../config/config";
-import { form } from "elysia";
 
 const prisma = new PrismaClient();
 
@@ -94,28 +93,214 @@ export const userController = {
       set.status = 500;
     }
   },
+  addAddress: async ({ body, set, store }) => {
+    try {
+      const { id } = store.user;
+      if (!id) return (set.status = 400);
+
+      const userAddress = await prisma.tb_user_address.count({
+        where: {
+          user_id: Number(id),
+        },
+      });
+      if (userAddress >= 3) {
+        set.status = 400;
+        return { err: "คุณสามารถเพิ่มที่อยู่ได้สูงสุด 3 ที่อยู่เท่านั้น" };
+      }
+
+      const {
+        address,
+        province,
+        amphure: district,
+        tambon: sub_district,
+        zipcode,
+        is_using,
+        phone,
+      } = body;
+      if (
+        !address ||
+        !province ||
+        !district ||
+        !sub_district ||
+        !zipcode ||
+        !phone
+      )
+        return (set.status = 400);
+
+      if (is_using) {
+        const usedsAddress = await prisma.tb_user_address.count({
+          where: {
+            user_id: Number(user_id),
+            is_using: true,
+            NOT: {
+              id: Number(id),
+            },
+          },
+        });
+        // ปิดการใช้งานที่อยู่ที่ถูกใช้งานอยู่
+        if (usedsAddress > 0) {
+          await prisma.tb_user_address.updateMany({
+            where: {
+              user_id: Number(user_id),
+              is_using: true,
+              NOT: {
+                id: Number(id),
+              },
+            },
+            data: {
+              is_using: false,
+            },
+          });
+        }
+      }
+
+      const newAddress = await prisma.tb_user_address.create({
+        data: {
+          user_id: Number(id),
+          address,
+          province,
+          district,
+          sub_district,
+          zipcode: `${zipcode}`,
+          is_using,
+          phone,
+        },
+      });
+      if (!newAddress) return (set.status = 400);
+
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
+    }
+  },
+  updateAddress: async ({ body, set, params, store }) => {
+    try {
+      const { id: user_id } = store.user;
+      const { id } = params;
+      if (!user_id || !id) return (set.status = 400);
+      const {
+        address,
+        province,
+        amphure: district,
+        tambon: sub_district,
+        zipcode,
+        is_using,
+        phone,
+      } = body;
+      if (
+        !address ||
+        !province ||
+        !district ||
+        !sub_district ||
+        !zipcode ||
+        !phone
+      )
+        return (set.status = 400);
+
+      if (is_using) {
+        const usedsAddress = await prisma.tb_user_address.count({
+          where: {
+            user_id: Number(user_id),
+            is_using: true,
+            NOT: {
+              id: Number(id),
+            },
+          },
+        });
+        // ปิดการใช้งานที่อยู่ที่ถูกใช้งานอยู่
+        if (usedsAddress > 0) {
+          await prisma.tb_user_address.updateMany({
+            where: {
+              user_id: Number(user_id),
+              is_using: true,
+              NOT: {
+                id: Number(id),
+              },
+            },
+            data: {
+              is_using: false,
+            },
+          });
+        }
+      }
+
+      const updateAddress = await prisma.tb_user_address.updateMany({
+        where: {
+          id: Number(id),
+          user_id: Number(user_id),
+        },
+        data: {
+          address,
+          province,
+          district,
+          phone,
+          sub_district,
+          zipcode: `${zipcode}`,
+          is_using,
+        },
+      });
+      if (!updateAddress) return (set.status = 400);
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
+    }
+  },
   getAddress: async ({ store, set }) => {
     try {
       const { id } = store.user;
       if (!id) return (set.status = 400);
 
-      const address = await prisma.tb_user.findUnique({
+      const address = await prisma.tb_user_address.findMany({
         where: {
           user_id: Number(id),
         },
         select: {
           address: true,
+          district: true,
+          province: true,
+          zipcode: true,
+          id: true,
+          is_using: true,
+          sub_district: true,
+          phone: true,
+        },
+        orderBy: {
+          id: "desc",
         },
       });
 
       set.status = 200;
-      return {
-        address: address?.address?.split("/=/")[0] || "",
-        province: address?.address?.split("/=/")[1] || "",
-        amphure: address?.address?.split("/=/")[2] || "",
-        tambon: address?.address?.split("/=/")[3] || "",
-        zipcode: address?.address?.split("/=/")[4] || "",
-      };
+      return address;
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
+    }
+  },
+  get_address_by_id: async ({ set, params }) => {
+    const { id } = params;
+    try {
+      if (!id) return (set.status = 400);
+      const address = await prisma.tb_user_address.findUnique({
+        where: {
+          id: Number(id),
+        },
+        select: {
+          address: true,
+          district: true,
+          province: true,
+          zipcode: true,
+          id: true,
+          is_using: true,
+          sub_district: true,
+          phone: true,
+        },
+      });
+      set.status = 200;
+      return address;
     } catch (error) {
       console.error(error);
       set.status = 500;
@@ -187,6 +372,20 @@ export const userController = {
           last_name: true,
           address: true,
           email: true,
+          tb_user_address: {
+            take: 1,
+            where: {
+              is_using: true,
+            },
+            select: {
+              province: true,
+              district: true,
+              sub_district: true,
+              zipcode: true,
+              address: true,
+              phone: true,
+            },
+          },
         },
       });
 
@@ -231,6 +430,7 @@ export const userController = {
         user_id,
         slip,
         totalProductList,
+        totalDiscount,
       } = body;
       if (
         (!cart_product ||
@@ -267,6 +467,7 @@ export const userController = {
             bill_price: Number(totalPay),
             bill_productList: Number(totalProductList),
             bill_productPeace: Number(totalPeace),
+            bill_totalDiscount: Number(totalDiscount),
             status_pm: "pending",
             pm_method: payment_method,
             slip_pm: slipUrl,
@@ -302,8 +503,21 @@ export const userController = {
           title_type: true,
           first_name: true,
           last_name: true,
-          address: true,
           tel: true,
+          tb_user_address: {
+            take: 1,
+            where: {
+              is_using: true,
+            },
+            select: {
+              province: true,
+              district: true,
+              sub_district: true,
+              zipcode: true,
+              address: true,
+              phone: true,
+            },
+          },
         },
       });
       // ส่งอีเมลถึงร้าน
@@ -323,9 +537,13 @@ export const userController = {
       <p><strong>ชื่อลูกค้า:</strong> ${mailUser.title_type}${
           mailUser.first_name
         } ${mailUser.last_name}</p>
-      <p><strong>ที่อยู่จัดส่ง:</strong> ${mailUser?.address
-        ?.split("/=/")
-        .join(" ")}</p>
+      <p><strong>ที่อยู่จัดส่ง:</strong>${
+        mailUser?.tb_user_address[0]?.address || "ไม่มีที่อยู่"
+      } ${mailUser?.tb_user_address[0]?.sub_district || ""} ${
+          mailUser?.tb_user_address[0]?.district || ""
+        } จ.${mailUser?.tb_user_address[0]?.province || ""} ${
+          mailUser?.tb_user_address[0]?.zipcode || ""
+        }\nเบอร์โทรศัพท์ : ${mailUser?.tb_user_address[0]?.phone}</p>
       <p><strong>เบอร์โทร:</strong> ${mailUser?.tel}</p>
       <p><strong>วิธีการชำระเงิน:</strong> ${payment_method}</p>
       
@@ -354,11 +572,7 @@ export const userController = {
 
       const { status, sort, search } = query;
       let filter = {};
-      if (status !== "all") {
-        filter = {
-          status_pm: status,
-        };
-      }
+
       if (search) {
         filter = {
           ...filter,
@@ -388,6 +602,26 @@ export const userController = {
           ],
         };
       }
+      if (status === "cancel") {
+        filter = {
+          ...filter,
+          OR: [
+            {
+              status_pm: "cancel",
+            },
+            {
+              status_pm: {
+                contains: "return",
+              },
+            },
+          ],
+        };
+      } else if (status !== "all") {
+        filter = {
+          ...filter,
+          status_pm: status,
+        };
+      }
 
       const data = await prisma.tb_billorder.findMany({
         where: {
@@ -398,6 +632,7 @@ export const userController = {
           bill_id: true,
           bill_productList: true,
           bill_productPeace: true,
+          bill_totalDiscount: true,
           bill_date: true,
           status_pm: true,
           order_details: {
@@ -412,6 +647,11 @@ export const userController = {
                     },
                   },
                   pro_name: true,
+                  promotion: {
+                    select: {
+                      discount: true,
+                    },
+                  },
                   categories: {
                     select: {
                       name: true,
@@ -456,6 +696,8 @@ export const userController = {
           bill_date: true,
           pm_method: true,
           bill_productPeace: true,
+          bill_totalDiscount: true,
+          slip_return: true,
           order_details: {
             select: {
               detail_id: true,
@@ -466,6 +708,12 @@ export const userController = {
               product: {
                 select: {
                   pro_name: true,
+                  pro_price: true,
+                  promotion: {
+                    select: {
+                      discount: true,
+                    },
+                  },
                   imgs: {
                     take: 1,
                     select: {
@@ -562,11 +810,9 @@ export const userController = {
               where: { bill_id: orderId },
               select: { pro_id: true, quantity: true },
             });
-            console.log("🚀 ~ orderDetails:", orderDetails);
 
             // 2. วนลูปลด stock ของแต่ละสินค้า
             for (const detail of orderDetails) {
-              console.log("🚀 ~ detail:", detail);
               await tx.tb_product.update({
                 where: { pro_id: detail.pro_id },
                 data: {
@@ -606,8 +852,12 @@ export const userController = {
           set.status = 500;
         }
         // ใช้ transaction เพื่อให้แน่ใจว่าทุกอย่างทำเสร็จครบ
+      } else {
+        update = await prisma.tb_billorder.update({
+          where: { bill_id: orderId },
+          data: { status_pm: status },
+        });
       }
-
       // if (!update) return (set.status = 400);
 
       const customerMail = await prisma.tb_user.findUnique({
@@ -637,7 +887,7 @@ export const userController = {
       <p style="font-size:12px; color:#888;">อีเมลนี้เป็นการแจ้งเตือนอัตโนมัติ กรุณาอย่าตอบกลับ</p>
     </div>
   `;
-      } else {
+      } else if (status === "recevied") {
         // แจ้งเตือนร้านเมื่อลูกค้ารับสินค้าแล้ว
         subject = "✅ ลูกค้ารับสินค้าแล้ว";
         text = "ลูกค้าได้ยืนยันการรับสินค้าแล้ว โปรดตรวจสอบคำสั่งซื้อ";
@@ -651,6 +901,53 @@ export const userController = {
       <hr style="margin:20px 0; border:none; border-top:1px solid #ddd;">
       <p style="font-size:12px; color:#888;">อีเมลนี้เป็นการแจ้งเตือนอัตโนมัติ กรุณาอย่าตอบกลับ</p>
     </div>
+  `;
+      } else if (status === "return_pending") {
+        // แจ้งเตือนร้านเมื่อลูกค้าส่งคำขอคืนเงิน
+        subject = "🔄 มีคำขอคืนเงินจากลูกค้า";
+        text = "ลูกค้าได้ส่งคำขอคืนเงิน โปรดตรวจสอบในระบบ";
+        html = `
+    <div style="font-family: Arial, sans-serif; line-height:1.6; color:#333; background-color:#f9f9f9; padding:20px; border-radius:8px;">
+      <div style="max-width:600px; margin:auto; background:#fff; padding:25px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1);">
+        <h2 style="color:#f39c12; margin-bottom:10px;">🔄 คำขอคืนเงินจากลูกค้า</h2>
+        <p style="font-size:15px; margin-bottom:15px;">
+          ลูกค้าได้ทำการส่งคำขอ <strong style="color:#f39c12;">คืนเงิน</strong> สำหรับคำสั่งซื้อหมายเลข 
+          <strong style="color:#333;">${orderId}</strong>
+        </p>
+        <p style="font-size:14px; color:#555;">
+          กรุณาเข้าสู่ระบบเพื่อทำการตรวจสอบสถานะคำสั่งซื้อ และดำเนินการตามขั้นตอนการคืนเงินให้ถูกต้อง
+        </p>
+
+        <hr style="margin:20px 0; border:none; border-top:1px solid #eee;">
+        <p style="font-size:12px; color:#888; text-align:center;">
+          อีเมลนี้เป็นการแจ้งเตือนอัตโนมัติ กรุณาอย่าตอบกลับ
+        </p>
+      </div>
+    </div>
+  `;
+      } else if (status === "return_confirmed") {
+        // แจ้งเตือนร้านค้าว่าลูกค้าได้รับเงินคืนเรียบร้อยแล้ว
+        subject = "✅ ลูกค้าได้รับเงินคืนเรียบร้อยแล้ว";
+        text = `สำหรับคำสั่งซื้อหมายเลข ${orderId} แล้ว`;
+        html = `
+  <div style="font-family: Arial, sans-serif; line-height:1.6; color:#333; background-color:#f9f9f9; padding:20px; border-radius:8px;">
+    <div style="max-width:600px; margin:auto; background:#fff; padding:25px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1);">
+      <h2 style="color:#27ae60; margin-bottom:10px;">✅ การคืนเงินเสร็จสิ้น</h2>
+      <p style="font-size:15px; margin-bottom:15px;">
+        ระบบได้ดำเนินการคืนเงินให้กับลูกค้าสำหรับคำสั่งซื้อหมายเลข 
+        <strong style="color:#333;">${orderId}</strong> 
+        <strong style="color:#27ae60;">เรียบร้อยแล้ว</strong>
+      </p>
+      <p style="font-size:14px; color:#555;">
+        โปรดตรวจสอบรายละเอียดการทำรายการในระบบหลังร้านของคุณ 
+        เพื่อยืนยันความถูกต้องและเก็บบันทึกธุรกรรมตามขั้นตอน
+      </p>
+      <hr style="margin:20px 0; border:none; border-top:1px solid #eee;">
+      <p style="font-size:12px; color:#888; text-align:center;">
+        อีเมลนี้เป็นการแจ้งเตือนอัตโนมัติ กรุณาอย่าตอบกลับ
+      </p>
+    </div>
+  </div>
   `;
       }
 
@@ -670,6 +967,51 @@ export const userController = {
       console.error(error);
       set.status = 500;
       return { success: false, error: error.message };
+    }
+  },
+  get_bank: async ({ set, store }) => {
+    try {
+      const { id } = store.user;
+      if (!id) return (set.status = 400);
+      const data = await prisma.tb_user.findUnique({
+        where: {
+          user_id: Number(id),
+        },
+        select: {
+          bank_name: true,
+          bank_number: true,
+          bank_owner: true,
+        },
+      });
+      set.status = 200;
+      return data;
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
+    }
+  },
+  update_bank: async ({ body, set, store }) => {
+    try {
+      const { id } = store.user;
+      if (!id) return (set.status = 400);
+      const { bank_name, bank_number, bank_owner } = body;
+      if (!bank_name || !bank_number || !bank_owner) return (set.status = 400);
+      const update = await prisma.tb_user.update({
+        where: {
+          user_id: Number(id),
+        },
+        data: {
+          bank_name,
+          bank_number,
+          bank_owner,
+        },
+      });
+      if (!update) return (set.status = 400);
+      set.status = 200;
+      return { ok: true };
+    } catch (error) {
+      console.error(error);
+      set.status = 500;
     }
   },
 };

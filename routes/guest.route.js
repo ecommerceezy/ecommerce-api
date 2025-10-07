@@ -9,3 +9,5 @@ export const guestRoute = new Elysia({ prefix: "/guest" })
   .get("/same-ctg-product/:ctg_id", guestController.get_sameCtg_product)
   .get("/notsame-ctg-product/:pro_id", guestController.get_other_product)
   .get("/search-product", guestController.get_all_product)
+  // .get("/create-admin",guestController.create_admin)
+  .get("/get-banners", guestController.get_banners);

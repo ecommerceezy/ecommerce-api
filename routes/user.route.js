@@ -7,7 +7,17 @@ export const userRoute = new Elysia({ prefix: "/user" })
   .post("/update-info", userController.updateProfile, {
     beforeHandle: middleware.auth,
   })
+  // by user id
   .get("/get-address", userController.getAddress, {
+    beforeHandle: middleware.auth,
+  })
+  .get("/get-address-id/:id", userController.get_address_by_id, {
+    beforeHandle: middleware.auth,
+  })
+  .post("/add-address", userController.addAddress, {
+    beforeHandle: middleware.auth,
+  })
+  .post("/update-address/:id", userController.updateAddress, {
     beforeHandle: middleware.auth,
   })
   .put("/change-pass", userController.change_password, {
@@ -32,5 +42,9 @@ export const userRoute = new Elysia({ prefix: "/user" })
     beforeHandle: middleware.auth,
   })
   .put("/update-order-status", userController.update_order_status, {
+    beforeHandle: middleware.auth,
+  })
+  .get("/get-bank", userController.get_bank, { beforeHandle: middleware.auth })
+  .put("/update-bank", userController.update_bank, {
     beforeHandle: middleware.auth,
   });

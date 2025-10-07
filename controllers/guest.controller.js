@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { PrismaClient } from "../src/generated/prisma";
 
 const prisma = new PrismaClient();
@@ -13,6 +12,7 @@ export const guestController = {
         },
         select: {
           name: true,
+          img: true,
           id: true,
         },
       });
@@ -28,11 +28,7 @@ export const guestController = {
     try {
       const products = await prisma.tb_product.findMany({
         take: 36,
-        where: {
-          pro_number: {
-            gt: 0,
-          },
-        },
+        skip: 0,
         select: {
           pro_id: true,
           imgs: {
@@ -51,6 +47,13 @@ export const guestController = {
           pro_price: true,
           pro_number: true,
           freight: true,
+          sell_count: true,
+          unit: true,
+          promotion: {
+            select: {
+              discount: true,
+            },
+          },
         },
       });
 
@@ -80,6 +83,12 @@ export const guestController = {
           pro_number: true,
           pro_name: true,
           freight: true,
+          unit: true,
+          promotion: {
+            select: {
+              discount: true,
+            },
+          },
           categories: {
             select: {
               name: true,
@@ -130,6 +139,13 @@ export const guestController = {
           pro_price: true,
           pro_size: true,
           freight: true,
+          sell_count: true,
+          unit: true,
+          promotion: {
+            select: {
+              discount: true,
+            },
+          },
         },
       });
 
@@ -143,7 +159,6 @@ export const guestController = {
   get_sameCtg_product: async ({ set, params }) => {
     try {
       const { ctg_id } = params;
-      console.log("🚀 ~ ctg_id:", ctg_id);
       if (!ctg_id) return (set.status = 400);
 
       const product = await prisma.tb_product.findMany({
@@ -161,6 +176,14 @@ export const guestController = {
           pro_id: true,
           pro_name: true,
           pro_price: true,
+          pro_number: true,
+          sell_count: true,
+          promotion: {
+            select: {
+              discount: true,
+            },
+          },
+          unit: true,
           imgs: {
             take: 1,
             select: {
@@ -189,7 +212,6 @@ export const guestController = {
   get_other_product: async ({ set, params }) => {
     try {
       const { pro_id } = params;
-      console.log("🚀 ~ pro_id:", pro_id);
       if (!pro_id) return (set.status = 400);
 
       const product = await prisma.tb_product.findMany({
@@ -203,10 +225,18 @@ export const guestController = {
           pro_id: true,
           pro_name: true,
           pro_price: true,
+          pro_number: true,
+          sell_count: true,
+          unit: true,
           imgs: {
             take: 1,
             select: {
               url: true,
+            },
+          },
+          promotion: {
+            select: {
+              discount: true,
             },
           },
           categories: {
@@ -310,6 +340,13 @@ export const guestController = {
             pro_name: true,
             pro_price: true,
             pro_number: true,
+            unit: true,
+            promotion: {
+              select: {
+                discount: true,
+              },
+            },
+            sell_count: true,
             imgs: {
               take: 1,
               select: {
@@ -353,6 +390,45 @@ export const guestController = {
         total,
         totalPage: Math.ceil(total / take) < 1 ? 1 : Math.ceil(total / take),
       };
+    } catch (error) {
+      console.error(error);
+      return (set.status = 200);
+    }
+  },
+  // create_admin: async ({ set }) => {
+  //   try {
+  //     const hashPassword = await bcrypt.hash("admin1234", 12);
+  //     const admin = await prisma.tb_user.create({
+  //       data: {
+  //         title_type: "admin",
+  //         first_name: "admin",
+  //         last_name: "admin",
+  //         user_name: "admin",
+  //         password: hashPassword,
+  //         ctn_status:"1",
+
+  //         roleId: 2, // admin
+  //       },
+  //     });
+  //     set.status = 200;
+  //     return admin;
+  //   } catch (error) {
+  //     console.error(error);
+  //     return (set.status = 500);
+  //   }
+  // },
+  get_banners: async ({ set }) => {
+    try {
+      const banners = await prisma.banners.findMany({
+        select: {
+          id: true,
+          img: true,
+          status: true,
+          updatedAt: true,
+        },
+      });
+      set.status = 200;
+      return banners;
     } catch (error) {
       console.error(error);
       return (set.status = 200);
